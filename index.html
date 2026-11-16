@@ -1,1 +1,319 @@
-PLACEHOLDER
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Celebrity Kaiju Deathmatch</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #111; color: #fff; font-family: 'Arial Black', Impact, sans-serif; overflow: hidden; }
+  #gameCanvas { display: block; width: 100vw; height: 100vh; background: linear-gradient(#1a1a2e, #16213e); }
+  #ui {
+    position: absolute; top: 0; left: 0; width: 100%; pointer-events: none;
+    text-shadow: 2px 2px 4px #000;
+  }
+  #title { text-align: center; font-size: 2.5rem; padding: 10px; color: #ff0055; }
+  #matchup { text-align: center; font-size: 1.8rem; margin-top: 5px; color: #00ffaa; }
+  #timer { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); font-size: 2rem; background: rgba(0,0,0,0.7); padding: 15px 30px; border-radius: 10px; border: 3px solid #ff0055; }
+  #status { text-align: center; font-size: 1.2rem; color: #ffcc00; margin-top: 5px; }
+  .cooldown #timer { border-color: #00ffaa; color: #00ffaa; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<canvas id="gameCanvas"></canvas>
+<div id="ui">
+  <div id="title">CELEBRITY KAIJU DEATHMATCH</div>
+  <div id="matchup">Elviszilla vs Alien Marilyn</div>
+  <div id="status">BATTLE IN PROGRESS</div>
+</div>
+<div id="timer">Next event in: --:--</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+let W, H;
+
+function resize() {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+const CYCLE_MS = 1 * 60 * 1000; // 1 minute
+const COOLDOWN_MS = 30 * 1000; // 30 seconds
+const BATTLE_MS = CYCLE_MS - COOLDOWN_MS;
+
+const matchups = [
+  { left: "Elviszilla", right: "Alien Marilyn", colorL: "#ff4444", colorR: "#ff66cc" },
+  { left: "Jacko-Kong", right: "Space Bieber", colorL: "#ffaa00", colorR: "#66aaff" },
+  { left: "Godz-Taylor", right: "Alien Drake", colorL: "#aa44ff", colorR: "#44ffaa" },
+  { left: "Mega-Madonna", right: "Kaiju Kanye", colorL: "#ff44aa", colorR: "#ffff44" },
+  { left: "Zilla-Swift", right: "Alien Rihanna", colorL: "#44aaff", colorR: "#ff8844" }
+];
+
+let currentMatch = 0;
+let buildings = [];
+let particles = [];
+let monsters = [];
+let lastPhase = null;
+let audioCtx;
+function playSound(freq, duration, type = 'square') {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+  gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start();
+  osc.stop(audioCtx.currentTime + duration);
+}
+
+function initCity() {
+  buildings = [];
+  const num = Math.floor(W / 40);
+  for (let i = 0; i < num; i++) {
+    buildings.push({
+      x: i * 40 + Math.random() * 10,
+      w: 25 + Math.random() * 15,
+      h: 50 + Math.random() * 200,
+      color: `hsl(${Math.random()*60 + 200}, 20%, ${30 + Math.random()*30}%)`,
+      health: 100,
+      destroyed: false
+    });
+  }
+}
+
+function initMonsters() {
+  const m = matchups[currentMatch];
+  monsters = [
+    { name: m.left, x: W * 0.25, y: H - 180, vx: 0, color: m.colorL, size: 140, attackCD: 0, hp: 100 },
+    { name: m.right, x: W * 0.75, y: H - 180, vx: 0, color: m.colorR, size: 140, attackCD: 0, hp: 100 }
+  ];
+}
+
+function getPhase() {
+  const now = Date.now();
+  const cyclePos = now % CYCLE_MS;
+  if (cyclePos < BATTLE_MS) {
+    return { type: 'battle', remaining: BATTLE_MS - cyclePos, elapsed: cyclePos };
+  } else {
+    return { type: 'cooldown', remaining: CYCLE_MS - cyclePos };
+  }
+}
+
+function spawnParticle(x, y, color, count = 10) {
+  for (let i = 0; i < count; i++) {
+    particles.push({
+      x, y,
+      vx: (Math.random() - 0.5) * 8,
+      vy: (Math.random() - 0.5) * 8 - 2,
+      life: 40 + Math.random() * 30,
+      color,
+      size: 2 + Math.random() * 4
+    });
+  }
+}
+
+function destroyBuilding(b) {
+  if (b.destroyed) return;
+  b.destroyed = true;
+  b.h *= 0.3;
+  spawnParticle(b.x + b.w/2, H - b.h, '#888', 20);
+  spawnParticle(b.x + b.w/2, H - b.h, '#ff6600', 10);
+  playSound(60 + Math.random()*40, 0.3, 'square');
+}
+
+function update(phase) {
+  if (phase.type !== lastPhase) {
+    lastPhase = phase.type;
+    if (phase.type === 'battle') {
+      currentMatch = Math.floor(Date.now() / CYCLE_MS) % matchups.length;
+      initCity();
+      initMonsters();
+      document.getElementById('matchup').textContent = `${matchups[currentMatch].left} vs ${matchups[currentMatch].right}`;
+      document.getElementById('status').textContent = 'BATTLE IN PROGRESS — CITY UNDER ATTACK!';
+      document.body.classList.remove('cooldown');
+    } else {
+      document.getElementById('status').textContent = 'COOLDOWN — CITY REBUILDING...';
+      document.body.classList.add('cooldown');
+    }
+  }
+
+  if (phase.type === 'battle') {
+    // Monster AI
+    monsters.forEach((m, i) => {
+      const other = monsters[1 - i];
+      const dir = other.x > m.x ? 1 : -1;
+      m.x += dir * 0.8;
+      m.x = Math.max(m.size/2, Math.min(W - m.size/2, m.x));
+      
+      m.attackCD--;
+      if (m.attackCD <= 0 && Math.abs(m.x - other.x) < 180) {
+        m.attackCD = 40 + Math.random() * 40;
+        // Attack
+        other.hp -= 5;
+        spawnParticle(other.x, other.y, '#ff0000', 15);
+        playSound(100 + Math.random()*50, 0.2, 'sawtooth');
+        // Destroy nearby buildings
+        buildings.forEach(b => {
+          if (!b.destroyed && Math.abs(b.x - m.x) < 100 && Math.random() < 0.4) {
+            destroyBuilding(b);
+          }
+        });
+      }
+      
+      // Stomp damage
+      buildings.forEach(b => {
+        if (!b.destroyed && Math.abs(b.x - m.x) < m.size/2 && Math.random() < 0.05) {
+          destroyBuilding(b);
+        }
+      });
+    });
+  }
+
+  // Particles
+  particles = particles.filter(p => {
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += 0.2;
+    p.life--;
+    return p.life > 0;
+  });
+}
+
+function drawCity() {
+  // Ground
+  ctx.fillStyle = '#222';
+  ctx.fillRect(0, H - 40, W, 40);
+  
+  buildings.forEach(b => {
+    ctx.fillStyle = b.destroyed ? '#333' : b.color;
+    ctx.fillRect(b.x, H - 40 - b.h, b.w, b.h);
+    // Windows
+    if (!b.destroyed) {
+      ctx.fillStyle = '#ffff88';
+      for (let y = 10; y < b.h - 10; y += 20) {
+        for (let x = 5; x < b.w - 5; x += 10) {
+          if (Math.random() > 0.3) ctx.fillRect(b.x + x, H - 40 - b.h + y, 4, 6);
+        }
+      }
+    }
+  });
+}
+
+function drawMonster(m) {
+  ctx.save();
+  ctx.translate(m.x, m.y);
+  
+  // Body (clay-like blob)
+  ctx.fillStyle = m.color;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, m.size/2, m.size * 0.6, 0, 0, Math.PI * 2);
+  ctx.fill();
+  
+  // Head
+  ctx.fillStyle = '#ffcc99';
+  ctx.beginPath();
+  ctx.arc(0, -m.size * 0.4, m.size * 0.25, 0, Math.PI * 2);
+  ctx.fill();
+  
+  // Eyes
+  ctx.fillStyle = '#000';
+  ctx.beginPath();
+  ctx.arc(-15, -m.size * 0.45, 8, 0, Math.PI * 2);
+  ctx.arc(15, -m.size * 0.45, 8, 0, Math.PI * 2);
+  ctx.fill();
+  
+  // Mouth
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(0, -m.size * 0.35, 20, 0.2, Math.PI - 0.2);
+  ctx.stroke();
+  
+  // Atomic breath / laser when attacking
+  const otherIdx = monsters.indexOf(m) === 0 ? 1 : 0;
+  const other = monsters[otherIdx];
+  if (m.attackCD > 25 && Math.abs(m.x - other.x) < 220) {
+    ctx.strokeStyle = m.color;
+    ctx.lineWidth = 10;
+    ctx.globalAlpha = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(0, -30);
+    ctx.lineTo(other.x - m.x, other.y - m.y + 20);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+  
+  // Arms/claws
+  ctx.fillStyle = m.color;
+  ctx.fillRect(-m.size/2 - 20, -20, 30, 15);
+  ctx.fillRect(m.size/2 - 10, -20, 30, 15);
+  
+  // Name tag
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 14px Arial';
+  ctx.textAlign = 'center';
+  ctx.fillText(m.name, 0, -m.size * 0.7);
+  
+  ctx.restore();
+}
+
+function drawParticles() {
+  particles.forEach(p => {
+    ctx.globalAlpha = p.life / 50;
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x, p.y, p.size, p.size);
+  });
+  ctx.globalAlpha = 1;
+}
+
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+  
+  // Sky gradient already in CSS
+  drawCity();
+  if (lastPhase === 'battle') {
+    monsters.forEach(drawMonster);
+  }
+  drawParticles();
+  
+  // Destruction overlay text occasionally
+  if (lastPhase === 'battle' && Math.random() < 0.02) {
+    ctx.fillStyle = 'rgba(255,0,0,0.3)';
+    ctx.font = 'bold 40px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('BOOM!', Math.random() * W, Math.random() * H * 0.5);
+  }
+}
+
+function updateUI(phase) {
+  const timerEl = document.getElementById('timer');
+  const secs = Math.ceil(phase.remaining / 1000);
+  const min = Math.floor(secs / 60);
+  const sec = secs % 60;
+  timerEl.textContent = phase.type === 'battle' 
+    ? `Battle ends in: ${min}:${sec.toString().padStart(2,'0')}`
+    : `Cooldown: ${min}:${sec.toString().padStart(2,'0')} until next battle`;
+}
+
+function loop() {
+  const phase = getPhase();
+  update(phase);
+  draw();
+  updateUI(phase);
+  requestAnimationFrame(loop);
+}
+
+// Init
+initCity();
+initMonsters();
+loop();
+</script>
+</body>
+</html>
